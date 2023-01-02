@@ -1,0 +1,25 @@
+version: '3'
+networks:
+  net:
+    driver: bridge
+volumes:
+  cache:
+    driver: local
+services:
+  power-watcher:
+    build: .
+    restart: always
+    depends_on:
+      - cache
+    environment:
+      - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
+    networks:
+      - net
+  cache:
+    image: redis:alpine
+    restart: always
+    networks:
+      - net
+    command: redis-server --save 60 1
+    volumes: 
+      - cache:/data
