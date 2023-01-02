@@ -102,7 +102,7 @@ async fn handler(
                 return Ok(()); // Ignore old messages, power was off
             }
 
-            let stored_time = redis_client.get(WAKE_UP_TIME_KEY).unwrap_or_else(|_| time);
+            let stored_time = redis_client.get(WAKE_UP_TIME_KEY).unwrap_or(time);
 
             let time_off = time - stored_time;
             let text = format!("Light is on for {}", duration_formatter(time_off));
@@ -120,19 +120,19 @@ fn duration_formatter(duration: chrono::Duration) -> String {
     let mut result = String::new();
     let days = duration.num_days();
     if days > 0 {
-        result.push_str(&format!("{} days ", days));
+        result.push_str(&format!("{days} days "));
     }
     let hours = duration.num_hours() % 24;
     if hours > 0 {
-        result.push_str(&format!("{} hours ", hours));
+        result.push_str(&format!("{hours} hours "));
     }
     let minutes = duration.num_minutes() % 60;
     if minutes > 0 {
-        result.push_str(&format!("{} minutes ", minutes));
+        result.push_str(&format!("{minutes} minutes "));
     }
     let seconds = duration.num_seconds() % 60;
     if seconds > 0 {
-        result.push_str(&format!("{} seconds ", seconds));
+        result.push_str(&format!("{seconds} seconds "));
     }
     result
 }
