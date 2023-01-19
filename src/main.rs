@@ -5,6 +5,11 @@ mod redis;
 const POWER_ON_TIME_KEY: &str = "power_on_time";
 const WAKE_UP_TIME_KEY: &str = "wake_up_time";
 
+#[derive(serde::Deserialize)]
+struct EnvVariables {
+    chat_id_to_report: i64,
+}
+
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 enum BotCommand {
@@ -12,23 +17,11 @@ enum BotCommand {
     Status,
 }
 
-#[async_trait::async_trait]
-trait SendMessage {
-    async fn send_msg(&self, text: String) -> anyhow::Result<()>;
-}
-
-#[async_trait::async_trait]
-impl SendMessage for Bot {
-    async fn send_msg(&self, text: String) -> anyhow::Result<()> {
-        let chat_id = 373897581i64;
-        self.send_message(ChatId(chat_id), text).await?;
-        Ok(())
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     pretty_env_logger::init();
+
+    let env = envy::from_env::<EnvVariables>()?;
 
     let bot = Bot::from_env();
     let mut redis_client = redis::RedisClient::connect();
@@ -42,7 +35,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // The bot should notify how much time power was off
     // then it should reply to the message with the light status
 
-    report_power_off_time(&bot, &mut redis_client).await;
+    report_power_off_time(&bot, &mut redis_client, env.chat_id_to_report).await;
 
     let redis_client2 = redis_client.clone();
     let mut dispatcher = Dispatcher::builder(bot, handler)
@@ -55,22 +48,47 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 /// Reports how much time power was off on start up
-async fn report_power_off_time(bot: &dyn SendMessage, redis: &mut redis::RedisClient) {
+async fn report_power_off_time(bot: &Bot, redis: &mut redis::RedisClient, chat_id: i64) {
     let stored_time = redis
         .get(POWER_ON_TIME_KEY)
         .unwrap_or_else(|_| chrono::Utc::now());
+    let wake_up_time: chrono::DateTime<chrono::Utc> = redis
+        .get(WAKE_UP_TIME_KEY)
+        .unwrap_or_else(|_| chrono::Utc::now());
 
     let current_time = chrono::Utc::now();
+    let time_until_wake_up = current_time - wake_up_time;
+    let time_off = current_time - stored_time;
+    let time_light_was_on = time_until_wake_up - time_off;
+
+    if time_off < chrono::Duration::minutes(1) {
+        bot.send_message(
+            ChatId(chat_id),
+            format!(
+                "Less than 1 minute bot outage. Probably updating the bot. The power was on for {}\n",
+                duration_formatter(time_light_was_on)
+            ),
+        )
+        .await
+        .expect("Failed to send message");
+        return;
+    }
+
+    bot.send_message(
+        ChatId(chat_id),
+        format!(
+            "The power was off for {}\n. The power was on for {}\n",
+            duration_formatter(time_off),
+            duration_formatter(time_light_was_on)
+        ),
+    )
+    .await
+    .expect("Failed to send message");
+
+    // Update wake up time
     redis
         .set(WAKE_UP_TIME_KEY, current_time)
         .expect("Failed to set wake up time");
-    let time_off = current_time - stored_time;
-    bot.send_msg(format!(
-        "The power was off for {}",
-        duration_formatter(time_off)
-    ))
-    .await
-    .expect("Failed to send message");
 }
 
 /// Updates that power is on every minute
