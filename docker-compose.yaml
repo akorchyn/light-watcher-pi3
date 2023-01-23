@@ -13,6 +13,7 @@ services:
       - cache
     environment:
       - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
+      - chat_id_to_report=${CHAT_ID_TO_REPORT}
     networks:
       - net
   cache:
