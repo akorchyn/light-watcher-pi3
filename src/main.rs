@@ -77,7 +77,7 @@ async fn report_power_off_time(bot: &Bot, redis: &mut redis::RedisClient, chat_i
     bot.send_message(
         ChatId(chat_id),
         format!(
-            "The power was off for {}\n. The power was on for {}\n",
+            "The power was off for {}.\nThe power was on for {}\n",
             duration_formatter(time_off),
             duration_formatter(time_light_was_on)
         ),
