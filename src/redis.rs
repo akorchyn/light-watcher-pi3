@@ -6,13 +6,12 @@ pub struct RedisClient {
 }
 
 impl RedisClient {
-    pub fn connect() -> Self {
-        let redis_client =
-            redis::Client::open("redis://cache").expect("Failed to connect to redis");
+    pub fn connect(redis_addr: &str) -> anyhow::Result<Self> {
+        let redis_client = redis::Client::open(redis_addr)?;
 
-        Self {
+        Ok(Self {
             client: redis_client,
-        }
+        })
     }
 
     pub fn get(&self, key: &str) -> Result<chrono::DateTime<chrono::Utc>, anyhow::Error> {

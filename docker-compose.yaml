@@ -12,8 +12,9 @@ services:
     depends_on:
       - cache
     environment:
-      - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
-      - chat_id_to_report=${CHAT_ID_TO_REPORT}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - CHAT_ID_TO_REPORT=${CHAT_ID_TO_REPORT}
+      - REDIS_ADDR="redis://cache"
     networks:
       - net
   cache:
