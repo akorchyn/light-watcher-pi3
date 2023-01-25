@@ -1,4 +1,9 @@
-use teloxide::{prelude::*, utils::command::BotCommands};
+use anyhow::ensure;
+use teloxide::{
+    prelude::*,
+    types::{ForwardedFrom, Recipient},
+    utils::command::BotCommands,
+};
 
 mod redis;
 
@@ -6,11 +11,11 @@ const POWER_ON_TIME_KEY: &str = "power_on_time";
 const WAKE_UP_TIME_KEY: &str = "wake_up_time";
 
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
 struct EnvVariables {
     chat_id_to_report: i64,
     redis_address: String,
     bot_token: String,
+    admin_user_id: u64,
 }
 
 #[derive(BotCommands, Clone)]
@@ -18,6 +23,19 @@ struct EnvVariables {
 enum BotCommand {
     #[command(description = "reply light status")]
     Status,
+}
+
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase")]
+enum AdminCommand {
+    Approve { user_id: u64 },
+    Disapprove { user_id: u64 },
+}
+
+#[derive(Clone)]
+struct BotEnv {
+    redis: redis::RedisClient,
+    admin_user_id: u64,
 }
 
 #[tokio::main]
@@ -29,20 +47,46 @@ async fn main() -> Result<(), anyhow::Error> {
     let bot = Bot::new(env.bot_token);
     let mut redis_client = redis::RedisClient::connect(&env.redis_address)?;
 
-    let handler = Update::filter_message().branch(
-        dptree::entry()
-            .filter_command::<BotCommand>()
-            .endpoint(handler),
-    );
+    let is_admin = move |update: Message| {
+        let admin_id = env.admin_user_id;
+        let user_id = update.from().map(|user| user.id);
+        let is_admin = user_id == Some(UserId(admin_id as u64));
+        is_admin
+    };
+
+    let handler = Update::filter_message()
+        .branch(
+            dptree::entry()
+                .filter_command::<BotCommand>()
+                .endpoint(handler),
+        )
+        .branch(
+            dptree::entry()
+                .filter_command::<AdminCommand>()
+                .filter(is_admin)
+                .endpoint(admin_handler),
+        )
+        .branch(
+            dptree::entry()
+                .filter(|message: Message| {
+                    let is_forward = message.forward_from().is_some();
+                    is_forward
+                })
+                .filter(is_admin)
+                .endpoint(forward_handler),
+        );
 
     // The bot should notify how much time power was off
     // then it should reply to the message with the light status
-
     report_power_off_time(&bot, &mut redis_client, env.chat_id_to_report).await?;
 
-    let redis_client2 = redis_client.clone();
+    let env = BotEnv {
+        redis: redis_client.clone(),
+        admin_user_id: env.admin_user_id,
+    };
+
     let mut dispatcher = Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![redis_client2])
+        .dependencies(dptree::deps![env])
         .build();
     let result = dispatcher.dispatch();
 
@@ -68,7 +112,7 @@ async fn report_power_off_time(
     let time_off = current_time - stored_time;
     let time_light_was_on = time_until_wake_up - time_off;
 
-    if time_off < chrono::Duration::minutes(1) {
+    if !time_off.is_zero() && time_off < chrono::Duration::minutes(1) {
         bot.send_message(
             ChatId(chat_id),
             format!(
@@ -109,12 +153,46 @@ async fn update_up_time(redis_client: redis::RedisClient) {
     }
 }
 
-async fn handler(
+async fn admin_handler(
     bot: Bot,
     msg: Message,
-    cmd: BotCommand,
-    redis_client: redis::RedisClient,
-) -> ResponseResult<()> {
+    cmd: AdminCommand,
+    bot_env: BotEnv,
+) -> anyhow::Result<()> {
+    match cmd {
+        AdminCommand::Approve { user_id } => {
+            bot_env.redis.approve_user(UserId(user_id))?;
+            bot.send_message(ChatId::from(msg.chat.id), "Approved user")
+                .send()
+                .await?;
+        }
+        AdminCommand::Disapprove { user_id } => {
+            bot_env.redis.disapprove_user(UserId(user_id))?;
+            bot.send_message(ChatId::from(msg.chat.id), "Disapproved user")
+                .send()
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handler(bot: Bot, msg: Message, cmd: BotCommand, bot_env: BotEnv) -> anyhow::Result<()> {
+    let user_id = msg
+        .from()
+        .map(|user| user.id)
+        .ok_or_else(|| anyhow::anyhow!("Not a message"))?;
+    // Permission check
+    if !bot_env.redis.verify_approval(user_id)? && user_id.0 != bot_env.admin_user_id {
+        bot.send_message(
+            ChatId::from(msg.chat.id),
+            "You are not entitled to use this command",
+        )
+        .send()
+        .await?;
+        return Ok(());
+    }
+
     match cmd {
         BotCommand::Status => {
             let time = chrono::Utc::now();
@@ -124,7 +202,7 @@ async fn handler(
                 return Ok(()); // Ignore old messages, power was off
             }
 
-            let stored_time = redis_client.get(WAKE_UP_TIME_KEY).unwrap_or(time);
+            let stored_time = bot_env.redis.get(WAKE_UP_TIME_KEY).unwrap_or(time);
 
             let time_off = time - stored_time;
             if time_off == chrono::Duration::zero() {
@@ -138,6 +216,24 @@ async fn handler(
                 .await?;
         }
     }
+    Ok(())
+}
+
+async fn forward_handler(bot: Bot, msg: Message) -> anyhow::Result<()> {
+    // Safe to unwrap because we only register this handler for forwarded messages
+    let user_id = msg.forward().unwrap().from.clone();
+    match user_id {
+        ForwardedFrom::User(user) => {
+            bot.send_message(msg.chat.id, format!("Forwarded from {}", user.id))
+                .send()
+                .await?
+        }
+        _ => {
+            bot.send_message(msg.chat.id, "Can't get user id, ask user directly")
+                .send()
+                .await?
+        }
+    };
     Ok(())
 }
 

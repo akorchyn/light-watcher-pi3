@@ -14,7 +14,8 @@ services:
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - CHAT_ID_TO_REPORT=${CHAT_ID_TO_REPORT}
-      - REDIS_ADDR="redis://cache"
+      - ADMIN_USER_ID=${ADMIN_USER_ID}
+      - REDIS_ADDRESS=redis://cache
     networks:
       - net
   cache:

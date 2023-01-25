@@ -1,4 +1,5 @@
 use redis::Commands;
+use teloxide::types::UserId;
 
 #[derive(Clone)]
 pub struct RedisClient {
@@ -33,5 +34,25 @@ impl RedisClient {
         let value = value.to_rfc3339();
         connection.set(key, value)?;
         Ok(())
+    }
+
+    pub fn verify_approval(&self, user_id: UserId) -> Result<bool, anyhow::Error> {
+        let mut connection = self.client.get_connection()?;
+        let value: Option<String> = connection.get(user_id.to_string())?;
+        Ok(value == Some("approved".to_string()))
+    }
+
+    fn manage_user(&self, user_id: UserId, value: &str) -> Result<(), anyhow::Error> {
+        let mut connection = self.client.get_connection()?;
+        connection.set(user_id.to_string(), value)?;
+        Ok(())
+    }
+
+    pub fn approve_user(&self, user_id: UserId) -> Result<(), anyhow::Error> {
+        self.manage_user(user_id, "approved")
+    }
+
+    pub fn disapprove_user(&self, user_id: UserId) -> Result<(), anyhow::Error> {
+        self.manage_user(user_id, "disapproved")
     }
 }
